@@ -9,14 +9,16 @@ import os
 import re
 import cv2
 import numpy as np
+import logging
+from colorlog import ColoredFormatter
 
 import config
 
 class SpliceThread(threading.Thread):
-    def __init__(self, spliceQueue):
+    def __init__(self, spliceQueue, logger):
         super(SpliceThread, self).__init__()
-        self.threadName = 'SpliceThread'
         self.spliceQueue = spliceQueue
+        self.logger = logger
         self.THREAD_EXIT = False
 
     def run(self):
@@ -28,7 +30,7 @@ class SpliceThread(threading.Thread):
                 pass
                 #print('splice error')
             time.sleep(0.1)
-        print(self.threadName + ' finish.')
+        self.logger.info('SpliceThread finish.')
 
     def spliceImage(self, img_path, height, width):
         filename = os.path.basename(img_path)
@@ -57,7 +59,7 @@ class SpliceThread(threading.Thread):
             base_img[y:h, x:w, :] = img_temp
             cv2.imwrite(base_img_dir, base_img)
         except Exception as e:
-            print('error in sliceImage')
+            self.logger.info('error in sliceImage')
             #print(e)
 
 

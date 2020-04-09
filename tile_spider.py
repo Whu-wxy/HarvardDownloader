@@ -34,13 +34,6 @@ img_queue = Queue()
 splice_queue = Queue()
 log_queue = Queue()
 
-splicethread = SpliceThread(splice_queue)
-splicethread.start()
-
-logthread = LogThread(log_queue)
-logthread.start()
-
-error_img_dict = {}
 
 def setup_logger(log_file_path: str = None):
     import logging
@@ -71,6 +64,12 @@ def setup_logger(log_file_path: str = None):
 from datetime import datetime
 now = datetime.now().strftime('%H-%M-%S')
 logger = setup_logger('./train_log_' + str(now) + '.txt')
+
+splicethread = SpliceThread(splice_queue, logger)
+splicethread.start()
+
+logthread = LogThread(log_queue, logger)
+logthread.start()
 
 def url_to_info(img_links):
     name_list = []
@@ -130,12 +129,13 @@ def tiles_splice(img_dir, width, height, cur_name):
 
 
 class DownloadThread(threading.Thread):
-    def __init__(self, threadName, imageQueue, spliceQueue, log_queue):
+    def __init__(self, threadName, imageQueue, spliceQueue, log_queue, logger):
         super(DownloadThread, self).__init__()
         self.threadName = threadName
         self.imageQueue = imageQueue
         self.spliceQueue = spliceQueue
         self.log_queue = log_queue
+        self.logger = logger
         self.THREAD_EXIT = False
 
     def run(self):
@@ -147,48 +147,35 @@ class DownloadThread(threading.Thread):
             except Exception as e:
                 pass
             time.sleep(0.1)
-        print(self.threadName + ' finish.')
-        # global logthread
-        # logthread.THREAD_EXIT = True
-        # logthread.join()
-        # global splicethread
-        # splicethread.THREAD_EXIT = True
-        # splicethread.join()
-
+        self.logger.info('{} finish.'.format(self.threadName))
 
     def writeImage(self, base_link, info, save_dir, max_w, max_h):
         x, y, w, h = info
-        info = (str(x), str(y), str(w), str(h))
+        strinfo = (str(x), str(y), str(w), str(h))
         img_id = base_link.split('/')[-2]
-        filename = ','.join(info) + '.jpg'
-        img_link = base_link + ','.join(info) + '/' + str(w)+','+str(h) + '/0/default.jpg'
+        filename = ','.join(strinfo) + '.jpg'
+        img_link = base_link + ','.join(strinfo) + '/' + str(w)+','+str(h) + '/0/default.jpg'
 
         i = 0
         success = False
-        while i < 3:   #重连
+        while i < config.retry_num:   #重连
             try:
-                r = requests.get(img_link, stream=False, headers=headers, verify=False, timeout=10)
+                r = requests.get(img_link, stream=False, headers=headers, verify=False, timeout=6)
                 success = True
                 break
             except requests.exceptions.RequestException as e:
                 success = False
                 #logger.info(e)
                 i += 1
-                logger.info('tile requests error: {}, try again: {}'.format(','.join(info), i))
+                self.logger.info('tile requests error: {}, retry: {}/{}'.format(','.join(strinfo), i, config.retry_num))
                 continue
 
         if not success:        #记录下载失败的块
             self.log_queue.put(os.path.join(save_dir, filename))
-            global error_img_dict
-            if error_img_dict.has_key(img_id):
-                img_id_error = error_img_dict[img_id]
-                img_id_error.append((x, y, w, h))
-                error_img_dict[img_id] = img_id_error
-            else:
-                img_id_error = []
-                img_id_error.append((x, y, w, h))
-                error_img_dict[img_id] = img_id_error
-            logger.info('error img id: {} - tile: {}, {}, {}, {}'.format(img_id, x, y, w, h))
+            self.logger.info('error img id: {} - tile: {}, {}, {}, {}'.format(img_id, x, y, w, h))
+            self.logger.info('put back tile-({}, {}, {}, {}) to queue'.format(x, y, w, h))
+            self.imageQueue.put((base_link, info, save_dir, max_w, max_h))    #重连三次下载失败的放回队列
+            return
 
         try:
             if len(r.content) / 1024 < config.img_size_threld:
@@ -198,25 +185,26 @@ class DownloadThread(threading.Thread):
                 self.spliceQueue.put((os.path.join(save_dir, filename), max_w, max_h))
         except Exception as e:
            # logger.info(repr(e))
-            logger.info('tile save error:{}'.format(os.path.join(save_dir, filename)))
+            self.logger.info('tile save error:{}'.format(os.path.join(save_dir, filename)))
             return
 
 
 
 def main():
     logger.info('begin')
+    error_img_set = set()
 
     thread_list = []
     loadList = []
     for i in range(config.thread_num):
         loadList.append('线程'+str(i))
     for threadName in loadList:
-        Ithraad = DownloadThread(threadName, img_queue, splice_queue, log_queue)
+        Ithraad = DownloadThread(threadName, img_queue, splice_queue, log_queue, logger)
         Ithraad.start()
         thread_list.append(Ithraad)
 
     html = ''
-    with open('./iframe_content2.html', 'r', encoding='utf-8') as f:
+    with open(config.offline_html, 'r', encoding='utf-8') as f:
         html = f.read()
 
     if html == '':
@@ -240,6 +228,7 @@ def main():
         link = link.replace("\r", "")
         img_links.append(link.strip())
 
+    img_links = list(set(img_links))   #去重
     info_list, name_list = url_to_info(img_links)
 
     count = 0
@@ -258,9 +247,7 @@ def main():
                              verify=False)
         except requests.exceptions.RequestException as e:
             logger.info(e)
-            global error_img_dict
-            img_id_error = []
-            error_img_dict[img_name] = img_id_error
+            error_img_set.update(img_name)
             logger.info('error img id: {}'.format(img_name))
             continue
 
@@ -300,7 +287,10 @@ def main():
     logthread.join()
 
     logger.info('结束！')
-    logger.info('Error img: {}'.format(error_img_dict))
+    for i in error_img_set:
+        #print('Error img: ', i)
+        logger.info('Error img: {}'.format(i))
+
 
 
 if __name__ == "__main__":

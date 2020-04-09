@@ -1,0 +1,8 @@
+opencv_python>=4.1.2.30
+tqdm>=4.36.1
+aiohttp>=3.6.2
+urllib3>=1.21.1
+colorlog>=4.1.0
+numpy>=1.18.0
+requests>=2.22.0
+beautifulsoup4>=4.9.0

@@ -9,14 +9,16 @@ import os
 import re
 import cv2
 import numpy as np
+import logging
+from colorlog import ColoredFormatter
 
 import config
 
 class LogThread(threading.Thread):
-    def __init__(self, logQueue):
+    def __init__(self, logQueue, logger):
         super(LogThread, self).__init__()
-        self.threadName = 'LogThread'
         self.logQueue = logQueue
+        self.logger = logger
         self.THREAD_EXIT = False
 
     def run(self):
@@ -27,7 +29,7 @@ class LogThread(threading.Thread):
             except Exception as e:
                 pass
             time.sleep(0.1)
-        print(self.threadName + ' finish.')
+        self.logger.info('LogThread finish.')
 
     def log(self, img_path):
         filename = os.path.basename(img_path)
@@ -38,13 +40,12 @@ class LogThread(threading.Thread):
         img_id = cur_dir.split('/')[-1]
         #previous_dir = os.path.abspath(os.path.join(os.path.dirname(img_path), ".."))
         log_dir = os.path.join(cur_dir, img_id+'.txt')
-        print(log_dir)
 
         try:
-            with open(log_dir, w) as f:
+            with open(log_dir, 'a') as f:
                 f.write(img_name+'\n')
         except Exception as e:
-            print('log error')
+            self.logger.info('log error')
             return
 
 
